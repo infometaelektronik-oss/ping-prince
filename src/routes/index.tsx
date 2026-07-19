@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   computeStats,
   detectLink,
+  initTransport,
   runDownloadStress,
   runGameTicks,
   runUploadStress,
