@@ -172,6 +172,7 @@ function Index() {
       ev.onPhase("done", "Diagnostic complete — building verdict");
       ac.abort();
       await tickPromise.catch(() => {});
+      transport.close();
 
       const link = detectLink(baselineStats.jitter, baselineStats.loss);
       const verdict = buildVerdict(
