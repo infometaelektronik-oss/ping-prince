@@ -134,8 +134,10 @@ function Index() {
     };
 
     try {
+      // Init transport: WebTransport datagrams if available, otherwise HEAD fallback.
+      const transport = await initTransport(ev, ac.signal);
       // Continuous game-tick loop through all phases
-      const tickPromise = runGameTicks(startedAt, () => currentPhase, ev, ac.signal, 60);
+      const tickPromise = runGameTicks(startedAt, () => currentPhase, ev, ac.signal, transport, 60);
 
       // Phase 1: Idle 6s
       ev.onPhase("idle", "PHASE 01 · Idle baseline (6s)");
