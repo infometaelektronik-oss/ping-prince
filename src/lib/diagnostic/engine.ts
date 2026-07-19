@@ -5,6 +5,12 @@ const DOWN_URL = (bytes: number) => `https://speed.cloudflare.com/__down?bytes=$
 const UP_URL = "https://speed.cloudflare.com/__up";
 const PING_URL = "https://speed.cloudflare.com/__down?bytes=0";
 
+// Optional WebTransport datagram echo endpoint (QUIC / HTTP/3).
+// Can be overridden at runtime via window.__NOVA_WT_URL for private deployments.
+// A public echo host is not universally available; if the handshake or first
+// datagram round-trip fails, the engine transparently falls back to HEAD fetch.
+const DEFAULT_WT_URL = "https://echo.webtransport.day/";
+
 export interface EngineEvents {
   onPing: (s: PingSample) => void;
   onSpeed: (s: SpeedSample) => void;
@@ -14,20 +20,155 @@ export interface EngineEvents {
 
 const now = () => performance.now();
 
-async function pingOnce(startedAt: number, phase: Phase, signal: AbortSignal): Promise<PingSample> {
-  const t0 = now();
+// ————————————————————————————————————————————————————————————————
+// Transport layer: WebTransport datagrams (preferred) → fetch HEAD fallback
+// ————————————————————————————————————————————————————————————————
+
+type Transport =
+  | { kind: "webtransport"; sendPing: () => Promise<number>; close: () => void; label: string }
+  | { kind: "fetch-head"; sendPing: () => Promise<number>; close: () => void; label: string };
+
+interface WTGlobal {
+  WebTransport?: new (url: string) => {
+    ready: Promise<void>;
+    closed: Promise<unknown>;
+    datagrams: {
+      readable: ReadableStream<Uint8Array>;
+      writable: WritableStream<Uint8Array>;
+    };
+    close(): void;
+  };
+  __NOVA_WT_URL?: string;
+}
+
+async function tryWebTransport(signal: AbortSignal): Promise<Transport | null> {
+  const g = globalThis as unknown as WTGlobal;
+  if (typeof g.WebTransport !== "function") return null;
+  const url = g.__NOVA_WT_URL || DEFAULT_WT_URL;
   try {
-    const res = await fetch(PING_URL + "&r=" + Math.random(), {
-      cache: "no-store",
-      signal,
-      method: "GET",
+    const wt = new g.WebTransport(url);
+    // Race handshake against a short timeout so we don't stall the whole test.
+    await Promise.race([
+      wt.ready,
+      new Promise((_, rej) => setTimeout(() => rej(new Error("wt-handshake-timeout")), 1500)),
+    ]);
+
+    const writer = wt.datagrams.writable.getWriter();
+    const reader = wt.datagrams.readable.getReader();
+
+    // Sequence-tagged payloads so out-of-order echoes still resolve correctly.
+    let seq = 0;
+    const pending = new Map<number, (rtt: number) => void>();
+    const sentAt = new Map<number, number>();
+
+    // Background reader loop — resolves pending promises as datagrams echo back.
+    (async () => {
+      try {
+        while (!signal.aborted) {
+          const { value, done } = await reader.read();
+          if (done || !value || value.byteLength < 4) continue;
+          const view = new DataView(value.buffer, value.byteOffset, value.byteLength);
+          const echoSeq = view.getUint32(0, true);
+          const resolve = pending.get(echoSeq);
+          const t0 = sentAt.get(echoSeq);
+          if (resolve && t0 != null) {
+            pending.delete(echoSeq);
+            sentAt.delete(echoSeq);
+            resolve(now() - t0);
+          }
+        }
+      } catch {
+        /* connection closed */
+      }
+    })();
+
+    // Verify the echo actually works before committing to this transport.
+    const verify = new Promise<number>((resolve, reject) => {
+      const s = seq++;
+      const payload = new Uint8Array(64);
+      new DataView(payload.buffer).setUint32(0, s, true);
+      sentAt.set(s, now());
+      pending.set(s, resolve);
+      writer.write(payload).catch(reject);
+      setTimeout(() => {
+        if (pending.delete(s)) reject(new Error("wt-verify-timeout"));
+      }, 1200);
     });
-    await res.arrayBuffer();
-    const rtt = now() - t0;
-    return { t: t0 - startedAt, rtt, phase };
+    await verify;
+
+    const sendPing = () =>
+      new Promise<number>((resolve) => {
+        const s = seq++;
+        // PUBG Mobile netcode: 64-byte UDP payload per 60ms tick.
+        const payload = new Uint8Array(64);
+        const dv = new DataView(payload.buffer);
+        dv.setUint32(0, s, true);
+        dv.setFloat64(4, now(), true);
+        sentAt.set(s, now());
+        pending.set(s, resolve);
+        writer.write(payload).catch(() => {
+          pending.delete(s);
+          sentAt.delete(s);
+          resolve(999);
+        });
+        // 500ms timeout = considered lost (esport-tier tolerance).
+        setTimeout(() => {
+          if (pending.delete(s)) {
+            sentAt.delete(s);
+            resolve(999);
+          }
+        }, 500);
+      });
+
+    return {
+      kind: "webtransport",
+      label: `WebTransport datagrams (QUIC/HTTP3) → ${new URL(url).host}`,
+      sendPing,
+      close: () => {
+        try { writer.releaseLock(); } catch { /* noop */ }
+        try { reader.releaseLock(); } catch { /* noop */ }
+        try { wt.close(); } catch { /* noop */ }
+      },
+    };
   } catch {
-    return { t: t0 - startedAt, rtt: 999, phase, lost: true };
+    return null;
   }
+}
+
+function makeFetchHeadTransport(): Transport {
+  // 64-byte HEAD probes emulate a PUBG-style UDP tick over TCP/QUIC HTTP.
+  return {
+    kind: "fetch-head",
+    label: "Fetch HEAD 64B → speed.cloudflare.com",
+    sendPing: async () => {
+      const t0 = now();
+      try {
+        await fetch(PING_URL + "&r=" + Math.random().toString(36).slice(2), {
+          method: "HEAD",
+          cache: "no-store",
+          keepalive: false,
+        });
+        return now() - t0;
+      } catch {
+        return 999;
+      }
+    },
+    close: () => {},
+  };
+}
+
+export async function initTransport(
+  ev: EngineEvents,
+  signal: AbortSignal,
+): Promise<Transport> {
+  const wt = await tryWebTransport(signal);
+  if (wt) {
+    ev.onLog(`Transport: ${wt.label}`);
+    return wt;
+  }
+  const fb = makeFetchHeadTransport();
+  ev.onLog(`Transport: ${fb.label} (WebTransport unavailable — using HEAD fallback)`);
+  return fb;
 }
 
 // 60ms tick game simulation loop. Runs until signal aborts.
@@ -36,15 +177,24 @@ export async function runGameTicks(
   getPhase: () => Phase,
   ev: EngineEvents,
   signal: AbortSignal,
+  transport: Transport,
   intervalMs = 60,
 ): Promise<PingSample[]> {
   const out: PingSample[] = [];
   let next = now();
   while (!signal.aborted) {
-    const s = await pingOnce(startedAt, getPhase(), signal);
+    const t0 = now();
+    const rtt = await transport.sendPing();
     if (signal.aborted) break;
-    out.push(s);
-    ev.onPing(s);
+    const lost = rtt >= 500;
+    const sample: PingSample = {
+      t: t0 - startedAt,
+      rtt: lost ? 999 : rtt,
+      phase: getPhase(),
+      lost: lost || undefined,
+    };
+    out.push(sample);
+    ev.onPing(sample);
     next += intervalMs;
     const wait = next - now();
     if (wait > 0) {
@@ -55,6 +205,7 @@ export async function runGameTicks(
   }
   return out;
 }
+
 
 async function downloadStream(bytes: number, signal: AbortSignal, onBytes: (n: number) => void) {
   const res = await fetch(DOWN_URL(bytes) + "&r=" + Math.random(), { cache: "no-store", signal });
