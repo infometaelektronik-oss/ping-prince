@@ -324,7 +324,7 @@ function xhrUpload(
     signal.addEventListener("abort", onAbort, { once: true });
     xhr.onloadend = () => signal.removeEventListener("abort", onAbort);
     try {
-      xhr.send(body);
+      xhr.send(body as unknown as ArrayBufferView);
     } catch (e) {
       reject(e as Error);
     }
