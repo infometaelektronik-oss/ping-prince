@@ -81,7 +81,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       {
         name: "description",
         content:
-          "Ultra-luxury cyberpunk network diagnostic: PUBG Mobile netcode simulation, bufferbloat stress test, jitter and packet-loss detection with AI verdict.",
+          "Ultra-luxury cyberpunk network diagnostic: real Mbps measurement, PUBG Mobile-tickrate RTT probes, 3-phase bufferbloat stress test, jitter and packet-loss detection with AI verdict.",
       },
       { name: "author", content: "Nova Latency" },
       { property: "og:title", content: "Nova Latency — Esport Network Diagnostic" },
