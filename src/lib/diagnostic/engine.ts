@@ -207,14 +207,27 @@ export async function runGameTicks(
 }
 
 
-async function downloadStream(bytes: number, signal: AbortSignal, onBytes: (n: number) => void) {
-  const res = await fetch(DOWN_URL(bytes) + "&r=" + Math.random(), { cache: "no-store", signal });
-  const reader = res.body?.getReader();
-  if (!reader) return;
-  while (!signal.aborted) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) onBytes(value.byteLength);
+// ————————————————————————————————————————————————————————————————
+// DOWNLOAD: 6 parallel streaming fetches, live byte accounting every 200ms.
+// ————————————————————————————————————————————————————————————————
+
+async function downloadStream(
+  bytes: number,
+  signal: AbortSignal,
+  onBytes: (n: number) => void,
+) {
+  const url = DOWN_URL(bytes) + "&r=" + Math.random().toString(36).slice(2);
+  const res = await fetch(url, { cache: "no-store", signal });
+  if (!res.ok || !res.body) throw new Error("download stream failed: " + res.status);
+  const reader = res.body.getReader();
+  try {
+    while (!signal.aborted) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value && value.byteLength) onBytes(value.byteLength);
+    }
+  } finally {
+    try { reader.releaseLock(); } catch { /* noop */ }
   }
 }
 
@@ -225,49 +238,97 @@ export async function runDownloadStress(
   startedAt: number,
 ): Promise<number> {
   const streams = 6;
-  const chunk = 50 * 1024 * 1024;
+  // Request 250MB per stream — Cloudflare returns it fully; we abort by signal.
+  const chunk = 250 * 1024 * 1024;
+
   let totalBytes = 0;
-  let lastReport = now();
-  let lastBytes = 0;
+  let windowBytes = 0;
+  let windowStart = now();
   let peak = 0;
 
   const onBytes = (n: number) => {
     totalBytes += n;
+    windowBytes += n;
     const t = now();
-    if (t - lastReport >= 250) {
-      const mbps = ((totalBytes - lastBytes) * 8) / ((t - lastReport) / 1000) / 1_000_000;
-      lastReport = t;
-      lastBytes = totalBytes;
+    const dt = t - windowStart;
+    if (dt >= 200) {
+      const mbps = (windowBytes * 8) / (dt / 1000) / 1_000_000;
       if (mbps > peak) peak = mbps;
       ev.onSpeed({ t: t - startedAt, mbps });
+      windowBytes = 0;
+      windowStart = t;
     }
   };
 
-  const endAt = now() + durationMs;
+  // Local abort fires at end of window, cancelling in-flight fetches immediately.
+  const localAc = new AbortController();
+  const onParentAbort = () => localAc.abort();
+  signal.addEventListener("abort", onParentAbort);
+  const timer = setTimeout(() => localAc.abort(), durationMs);
+
   const workers: Promise<void>[] = [];
   for (let i = 0; i < streams; i++) {
     workers.push(
       (async () => {
-        while (now() < endAt && !signal.aborted) {
+        while (!localAc.signal.aborted) {
           try {
-            await downloadStream(chunk, signal, onBytes);
+            await downloadStream(chunk, localAc.signal, onBytes);
           } catch {
-            break;
+            if (localAc.signal.aborted) break;
+            // brief backoff on transient failure, then retry
+            await new Promise((r) => setTimeout(r, 100));
           }
         }
       })(),
     );
   }
-  // Force-abort at endAt
-  const stopper = setTimeout(() => {
-    // no-op; workers exit on time
-  }, durationMs);
-  await Promise.race([
-    Promise.all(workers),
-    new Promise<void>((r) => setTimeout(r, durationMs + 500)),
-  ]);
-  clearTimeout(stopper);
+
+  await Promise.allSettled(workers);
+  clearTimeout(timer);
+  signal.removeEventListener("abort", onParentAbort);
+
+  const totalMs = now() - windowStart + (now() - startedAt - (now() - windowStart));
+  void totalMs; // unused; kept for potential future averaging
+  ev.onLog(
+    `Download complete: ${(totalBytes / 1_000_000).toFixed(1)} MB total · peak ${peak.toFixed(1)} Mbps`,
+  );
   return peak;
+}
+
+// ————————————————————————————————————————————————————————————————
+// UPLOAD: XHR with upload.onprogress for real live byte counters.
+// fetch() cannot report upload progress in browsers without streams+duplex
+// (Chromium-only + HTTP/2 required). XHR works everywhere.
+// ————————————————————————————————————————————————————————————————
+
+function xhrUpload(
+  url: string,
+  body: Uint8Array,
+  signal: AbortSignal,
+  onProgress: (delta: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let lastLoaded = 0;
+    xhr.open("POST", url, true);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = (e) => {
+      const delta = e.loaded - lastLoaded;
+      lastLoaded = e.loaded;
+      if (delta > 0) onProgress(delta);
+    };
+    xhr.onload = () => resolve();
+    xhr.onerror = () => reject(new Error("upload xhr error"));
+    xhr.onabort = () => reject(new Error("upload aborted"));
+    const onAbort = () => xhr.abort();
+    signal.addEventListener("abort", onAbort, { once: true });
+    xhr.onloadend = () => signal.removeEventListener("abort", onAbort);
+    try {
+      xhr.send(body.buffer as ArrayBuffer);
+    } catch (e) {
+      reject(e as Error);
+    }
+  });
 }
 
 export async function runUploadStress(
@@ -277,52 +338,60 @@ export async function runUploadStress(
   startedAt: number,
 ): Promise<number> {
   const streams = 4;
-  const chunkSize = 2 * 1024 * 1024;
+  // 8MB per request — long enough for onprogress to tick many times.
+  const chunkSize = 8 * 1024 * 1024;
   const payload = new Uint8Array(chunkSize);
-  crypto.getRandomValues(payload.subarray(0, Math.min(65536, chunkSize)));
+  // getRandomValues caps at 65536 bytes; fill the head, rest can stay zero
+  // (Cloudflare __up doesn't compress the body — bytes on wire == payload size).
+  crypto.getRandomValues(payload.subarray(0, 65536));
+
   let totalBytes = 0;
-  let lastReport = now();
-  let lastBytes = 0;
+  let windowBytes = 0;
+  let windowStart = now();
   let peak = 0;
 
-  const report = (n: number) => {
-    totalBytes += n;
+  const onProgress = (delta: number) => {
+    totalBytes += delta;
+    windowBytes += delta;
     const t = now();
-    if (t - lastReport >= 250) {
-      const mbps = ((totalBytes - lastBytes) * 8) / ((t - lastReport) / 1000) / 1_000_000;
-      lastReport = t;
-      lastBytes = totalBytes;
+    const dt = t - windowStart;
+    if (dt >= 200) {
+      const mbps = (windowBytes * 8) / (dt / 1000) / 1_000_000;
       if (mbps > peak) peak = mbps;
       ev.onSpeed({ t: t - startedAt, mbps });
+      windowBytes = 0;
+      windowStart = t;
     }
   };
 
-  const endAt = now() + durationMs;
+  const localAc = new AbortController();
+  const onParentAbort = () => localAc.abort();
+  signal.addEventListener("abort", onParentAbort);
+  const timer = setTimeout(() => localAc.abort(), durationMs);
+
   const workers: Promise<void>[] = [];
   for (let i = 0; i < streams; i++) {
     workers.push(
       (async () => {
-        while (now() < endAt && !signal.aborted) {
+        while (!localAc.signal.aborted) {
           try {
-            await fetch(UP_URL, {
-              method: "POST",
-              body: payload,
-              cache: "no-store",
-              signal,
-              headers: { "Content-Type": "application/octet-stream" },
-            });
-            report(chunkSize);
+            await xhrUpload(UP_URL, payload, localAc.signal, onProgress);
           } catch {
-            break;
+            if (localAc.signal.aborted) break;
+            await new Promise((r) => setTimeout(r, 100));
           }
         }
       })(),
     );
   }
-  await Promise.race([
-    Promise.all(workers),
-    new Promise<void>((r) => setTimeout(r, durationMs + 500)),
-  ]);
+
+  await Promise.allSettled(workers);
+  clearTimeout(timer);
+  signal.removeEventListener("abort", onParentAbort);
+
+  ev.onLog(
+    `Upload complete: ${(totalBytes / 1_000_000).toFixed(1)} MB total · peak ${peak.toFixed(1)} Mbps`,
+  );
   return peak;
 }
 
