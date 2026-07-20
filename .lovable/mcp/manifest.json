@@ -1,0 +1,231 @@
+{
+  "version": 1,
+  "sdk_version": "0.24.0",
+  "path": "/mcp",
+  "auth": {
+    "type": "none"
+  },
+  "mcp": {
+    "server": {
+      "name": "nova-latency-mcp",
+      "version": "0.1.0",
+      "title": "Nova Latency — Esport Network Diagnostic"
+    },
+    "tools": [
+      {
+        "name": "analyze_network_metrics",
+        "title": "Analyze network metrics",
+        "description": "Run the Nova Latency verdict engine on measured network metrics. Given baseline / download-loaded / upload-loaded ping stats plus real download/upload Mbps and link info, returns a network health grade (A+..D), a PUBG Mobile stability verdict, the root cause (bufferbloat vs Wi-Fi jitter vs loss), and concrete recommendations (QoS/SQM, 5GHz, Ethernet, DNS, etc). Pure logic, no live measurement.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "properties": {
+            "baseline": {
+              "type": "object",
+              "properties": {
+                "avgPing": {
+                  "type": "number",
+                  "description": "Average ping in ms."
+                },
+                "medianPing": {
+                  "type": "number",
+                  "description": "Median ping in ms."
+                },
+                "p95Ping": {
+                  "type": "number",
+                  "description": "95th percentile ping in ms."
+                },
+                "jitter": {
+                  "type": "number",
+                  "description": "Jitter (std deviation of inter-arrival) in ms."
+                },
+                "loss": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "description": "Packet loss ratio 0..1 (e.g. 0.005 = 0.5%)."
+                },
+                "samples": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991,
+                  "description": "Number of samples collected in this phase."
+                }
+              },
+              "required": [
+                "avgPing",
+                "medianPing",
+                "p95Ping",
+                "jitter",
+                "loss",
+                "samples"
+              ],
+              "description": "Idle-phase ping stats."
+            },
+            "loadedDown": {
+              "type": "object",
+              "properties": {
+                "avgPing": {
+                  "type": "number",
+                  "description": "Average ping in ms."
+                },
+                "medianPing": {
+                  "type": "number",
+                  "description": "Median ping in ms."
+                },
+                "p95Ping": {
+                  "type": "number",
+                  "description": "95th percentile ping in ms."
+                },
+                "jitter": {
+                  "type": "number",
+                  "description": "Jitter (std deviation of inter-arrival) in ms."
+                },
+                "loss": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "description": "Packet loss ratio 0..1 (e.g. 0.005 = 0.5%)."
+                },
+                "samples": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991,
+                  "description": "Number of samples collected in this phase."
+                }
+              },
+              "required": [
+                "avgPing",
+                "medianPing",
+                "p95Ping",
+                "jitter",
+                "loss",
+                "samples"
+              ],
+              "description": "Ping stats measured under download stress."
+            },
+            "loadedUp": {
+              "type": "object",
+              "properties": {
+                "avgPing": {
+                  "type": "number",
+                  "description": "Average ping in ms."
+                },
+                "medianPing": {
+                  "type": "number",
+                  "description": "Median ping in ms."
+                },
+                "p95Ping": {
+                  "type": "number",
+                  "description": "95th percentile ping in ms."
+                },
+                "jitter": {
+                  "type": "number",
+                  "description": "Jitter (std deviation of inter-arrival) in ms."
+                },
+                "loss": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "description": "Packet loss ratio 0..1 (e.g. 0.005 = 0.5%)."
+                },
+                "samples": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991,
+                  "description": "Number of samples collected in this phase."
+                }
+              },
+              "required": [
+                "avgPing",
+                "medianPing",
+                "p95Ping",
+                "jitter",
+                "loss",
+                "samples"
+              ],
+              "description": "Ping stats measured under upload stress."
+            },
+            "downloadMbps": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Measured real download throughput in Mbps."
+            },
+            "uploadMbps": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Measured real upload throughput in Mbps."
+            },
+            "link": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "ethernet-like",
+                    "wifi-5ghz-like",
+                    "wifi-2.4ghz-like",
+                    "cellular",
+                    "unknown"
+                  ],
+                  "description": "Detected link kind."
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "Short human explanation of why this kind was inferred."
+                },
+                "effectiveType": {
+                  "type": "string"
+                },
+                "downlinkMbps": {
+                  "type": "number"
+                },
+                "rttMs": {
+                  "type": "number"
+                },
+                "saveData": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "kind",
+                "reason"
+              ],
+              "description": "Detected link/connection info."
+            }
+          },
+          "required": [
+            "baseline",
+            "loadedDown",
+            "loadedUp",
+            "downloadMbps",
+            "uploadMbps",
+            "link"
+          ]
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "get_diagnostic_methodology",
+        "title": "Get diagnostic methodology",
+        "description": "Return a plain-text description of the Nova Latency diagnostic: transport (WebTransport → HEAD-fetch fallback), the three-phase test (idle / download stress / upload stress), how bufferbloat is measured, and how the verdict / grade is derived.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": null
+      }
+    ]
+  }
+}
