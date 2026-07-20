@@ -214,14 +214,14 @@ function Index() {
               <span className="neon-magenta">Netcode</span> Analyzer
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-              PUBG Mobile-grade netcode simulation. 60ms tick UDP-style ping loop, 3-phase
-              bufferbloat stress test, jitter and micro-loss detection with AI health verdict —
-              built for players whose speed test lies.
+              Gerçek ölçüm motoru: WebTransport / QUIC üzerinden 60ms tick RTT probe'ları,
+              Cloudflare'e çoklu-thread gerçek indirme &amp; yükleme (Mbps), 3 fazlı bufferbloat
+              stres testi ve mikro paket-kaybı tespiti — hız testinin yalan söylediği oyuncular için.
             </p>
           </div>
           <div className="flex items-center gap-3">
             <span className="rounded-full border border-hairline px-2.5 py-1 text-[10px] uppercase tracking-widest text-muted-foreground">
-              Browser-emulated UDP
+              Live Measurement
             </span>
             {!running ? (
               <button
