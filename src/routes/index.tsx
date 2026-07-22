@@ -25,11 +25,11 @@ export const Route = createFileRoute("/")({
         content:
           "Cyberpunk-grade PUBG Mobile netcode simulator: 60ms UDP-style ticks, 3-phase bufferbloat stress test, jitter & packet-loss detection with AI health verdict.",
       },
-      { property: "og:title", content: "Nova Latency — Esport Network Diagnostic" },
+      { property: "og:title", content: "Nova Latency — Esport Network & Bufferbloat Analyzer" },
       {
         property: "og:description",
         content:
-          "See why your ping spikes in PUBG Mobile even when speed tests look fine. Real bufferbloat, jitter and micro-loss analysis.",
+          "Cyberpunk-grade PUBG Mobile netcode simulator: 60ms UDP-style ticks, 3-phase bufferbloat stress test, jitter & packet-loss detection with AI health verdict.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },

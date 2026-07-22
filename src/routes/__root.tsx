@@ -81,17 +81,21 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       {
         name: "description",
         content:
-          "Ultra-luxury cyberpunk network diagnostic: real Mbps measurement, PUBG Mobile-tickrate RTT probes, 3-phase bufferbloat stress test, jitter and packet-loss detection with AI verdict.",
+          "Cyberpunk-grade PUBG Mobile netcode simulator: 60ms UDP-style ticks, 3-phase bufferbloat stress test, jitter & packet-loss detection with AI health verdict.",
       },
       { name: "author", content: "Nova Latency" },
-      { property: "og:title", content: "Nova Latency — Esport Network Diagnostic" },
+      { property: "og:title", content: "Nova Latency — Esport Network & Bufferbloat Analyzer" },
       {
         property: "og:description",
         content:
-          "See the hidden reason your ping spikes in PUBG Mobile even when Speedtest says the line is fine.",
+          "Cyberpunk-grade PUBG Mobile netcode simulator: 60ms UDP-style ticks, 3-phase bufferbloat stress test, jitter & packet-loss detection with AI health verdict.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: "Nova Latency — Esport Network & Bufferbloat Analyzer" },
+      { name: "twitter:description", content: "Cyberpunk-grade PUBG Mobile netcode simulator: 60ms UDP-style ticks, 3-phase bufferbloat stress test, jitter & packet-loss detection with AI health verdict." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/02d00b98-f8ed-488b-8a71-a9cb6483983c/id-preview-cb92887c--1cf96d69-ddcd-4511-ab33-2a4399130bcd.lovable.app-1784688119710.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/02d00b98-f8ed-488b-8a71-a9cb6483983c/id-preview-cb92887c--1cf96d69-ddcd-4511-ab33-2a4399130bcd.lovable.app-1784688119710.png" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
