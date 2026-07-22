@@ -245,8 +245,7 @@ export async function runDownloadStress(
   startedAt: number,
 ): Promise<number> {
   const streams = 6;
-  // Request 250MB per stream — Cloudflare returns it fully; we abort by signal.
-  const chunk = 250 * 1024 * 1024;
+  const chunk = DOWN_CHUNK_BYTES;
 
   let totalBytes = 0;
   let windowBytes = 0;
