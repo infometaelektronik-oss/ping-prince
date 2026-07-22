@@ -252,25 +252,28 @@ export async function runDownloadStress(
   let windowStart = now();
   let peak = 0;
 
+  // Byte accounting only accumulates — the emit is time-driven so a burst
+  // of synchronous credits from a completed chunk still averages correctly.
   const onBytes = (n: number) => {
     totalBytes += n;
     windowBytes += n;
-    const t = now();
-    const dt = t - windowStart;
-    if (dt >= 200) {
-      const mbps = (windowBytes * 8) / (dt / 1000) / 1_000_000;
-      if (mbps > peak) peak = mbps;
-      ev.onSpeed({ t: t - startedAt, mbps });
-      windowBytes = 0;
-      windowStart = t;
-    }
   };
 
-  // Local abort fires at end of window, cancelling in-flight fetches immediately.
   const localAc = new AbortController();
   const onParentAbort = () => localAc.abort();
   signal.addEventListener("abort", onParentAbort);
   const timer = setTimeout(() => localAc.abort(), durationMs);
+
+  const ticker = setInterval(() => {
+    const t = now();
+    const dt = t - windowStart;
+    if (dt <= 0) return;
+    const mbps = (windowBytes * 8) / (dt / 1000) / 1_000_000;
+    if (mbps > peak) peak = mbps;
+    ev.onSpeed({ t: t - startedAt, mbps });
+    windowBytes = 0;
+    windowStart = t;
+  }, 250);
 
   const workers: Promise<void>[] = [];
   for (let i = 0; i < streams; i++) {
@@ -281,7 +284,6 @@ export async function runDownloadStress(
             await downloadChunk(chunk, localAc.signal, onBytes);
           } catch {
             if (localAc.signal.aborted) break;
-            // brief backoff on transient failure, then retry
             await new Promise((r) => setTimeout(r, 100));
           }
         }
@@ -290,11 +292,10 @@ export async function runDownloadStress(
   }
 
   await Promise.allSettled(workers);
+  clearInterval(ticker);
   clearTimeout(timer);
   signal.removeEventListener("abort", onParentAbort);
 
-  const totalMs = now() - windowStart + (now() - startedAt - (now() - windowStart));
-  void totalMs; // unused; kept for potential future averaging
   ev.onLog(
     `Download complete: ${(totalBytes / 1_000_000).toFixed(1)} MB total · peak ${peak.toFixed(1)} Mbps`,
   );
