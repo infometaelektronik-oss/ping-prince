@@ -289,8 +289,9 @@ function Index() {
 
         {/* Verdict or log */}
         {result ? (
-          <div className="mb-4">
+          <div className="mb-4 space-y-4">
             <VerdictPanel result={result} />
+            <PluginPanel result={result} />
           </div>
         ) : (
           <div className="panel mb-4 p-4">
