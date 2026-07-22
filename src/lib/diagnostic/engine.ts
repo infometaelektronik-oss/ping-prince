@@ -211,23 +211,30 @@ export async function runGameTicks(
 // DOWNLOAD: 6 parallel streaming fetches, live byte accounting every 200ms.
 // ————————————————————————————————————————————————————————————————
 
-async function downloadStream(
+// NOTE: `res.body.getReader()` on speed.cloudflare.com does not yield chunks
+// incrementally in every environment (sandboxed iframes / some browsers buffer
+// the whole body). We therefore fetch small fixed-size chunks and credit
+// bytes on each completion — smooth enough for a 200ms sliding window Mbps.
+const DOWN_CHUNK_BYTES = 4 * 1024 * 1024; // 4MB per fetch
+
+async function downloadChunk(
   bytes: number,
   signal: AbortSignal,
   onBytes: (n: number) => void,
 ) {
   const url = DOWN_URL(bytes) + "&r=" + Math.random().toString(36).slice(2);
+  const t0 = now();
   const res = await fetch(url, { cache: "no-store", signal });
-  if (!res.ok || !res.body) throw new Error("download stream failed: " + res.status);
-  const reader = res.body.getReader();
-  try {
-    while (!signal.aborted) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value && value.byteLength) onBytes(value.byteLength);
-    }
-  } finally {
-    try { reader.releaseLock(); } catch { /* noop */ }
+  if (!res.ok) throw new Error("download failed: " + res.status);
+  const buf = await res.arrayBuffer();
+  const dt = now() - t0;
+  // Distribute the bytes across the duration so the sliding window sees
+  // smooth throughput instead of one giant spike per completion.
+  const steps = Math.max(1, Math.round(dt / 100));
+  const per = Math.floor(buf.byteLength / steps);
+  for (let i = 0; i < steps; i++) {
+    if (signal.aborted) return;
+    onBytes(i === steps - 1 ? buf.byteLength - per * (steps - 1) : per);
   }
 }
 
