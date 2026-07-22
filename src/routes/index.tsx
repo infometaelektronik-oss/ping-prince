@@ -126,8 +126,18 @@ function Index() {
         scheduleFlush();
       },
       onSpeed: (s: SpeedSample) => {
-        if (currentPhase === "download") pendingLive.current.downMbps = +s.mbps.toFixed(1);
-        if (currentPhase === "upload") pendingLive.current.upMbps = +s.mbps.toFixed(1);
+        // Speedtest-style: show peak-so-far for the active phase so short
+        // burst-y ticks (fetch chunk completions) don't collapse the gauge
+        // back to 0 between windows.
+        const v = +s.mbps.toFixed(1);
+        if (currentPhase === "download") {
+          const prev = pendingLive.current.downMbps ?? live.downMbps;
+          pendingLive.current.downMbps = Math.max(prev, v);
+        }
+        if (currentPhase === "upload") {
+          const prev = pendingLive.current.upMbps ?? live.upMbps;
+          pendingLive.current.upMbps = Math.max(prev, v);
+        }
         scheduleFlush();
       },
       onPhase: (p: Phase, label: string) => {
