@@ -211,23 +211,30 @@ export async function runGameTicks(
 // DOWNLOAD: 6 parallel streaming fetches, live byte accounting every 200ms.
 // ————————————————————————————————————————————————————————————————
 
-async function downloadStream(
+// NOTE: `res.body.getReader()` on speed.cloudflare.com does not yield chunks
+// incrementally in every environment (sandboxed iframes / some browsers buffer
+// the whole body). We therefore fetch small fixed-size chunks and credit
+// bytes on each completion — smooth enough for a 200ms sliding window Mbps.
+const DOWN_CHUNK_BYTES = 4 * 1024 * 1024; // 4MB per fetch
+
+async function downloadChunk(
   bytes: number,
   signal: AbortSignal,
   onBytes: (n: number) => void,
 ) {
   const url = DOWN_URL(bytes) + "&r=" + Math.random().toString(36).slice(2);
+  const t0 = now();
   const res = await fetch(url, { cache: "no-store", signal });
-  if (!res.ok || !res.body) throw new Error("download stream failed: " + res.status);
-  const reader = res.body.getReader();
-  try {
-    while (!signal.aborted) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value && value.byteLength) onBytes(value.byteLength);
-    }
-  } finally {
-    try { reader.releaseLock(); } catch { /* noop */ }
+  if (!res.ok) throw new Error("download failed: " + res.status);
+  const buf = await res.arrayBuffer();
+  const dt = now() - t0;
+  // Distribute the bytes across the duration so the sliding window sees
+  // smooth throughput instead of one giant spike per completion.
+  const steps = Math.max(1, Math.round(dt / 100));
+  const per = Math.floor(buf.byteLength / steps);
+  for (let i = 0; i < steps; i++) {
+    if (signal.aborted) return;
+    onBytes(i === steps - 1 ? buf.byteLength - per * (steps - 1) : per);
   }
 }
 
@@ -238,33 +245,35 @@ export async function runDownloadStress(
   startedAt: number,
 ): Promise<number> {
   const streams = 6;
-  // Request 250MB per stream — Cloudflare returns it fully; we abort by signal.
-  const chunk = 250 * 1024 * 1024;
+  const chunk = DOWN_CHUNK_BYTES;
 
   let totalBytes = 0;
   let windowBytes = 0;
   let windowStart = now();
   let peak = 0;
 
+  // Byte accounting only accumulates — the emit is time-driven so a burst
+  // of synchronous credits from a completed chunk still averages correctly.
   const onBytes = (n: number) => {
     totalBytes += n;
     windowBytes += n;
-    const t = now();
-    const dt = t - windowStart;
-    if (dt >= 200) {
-      const mbps = (windowBytes * 8) / (dt / 1000) / 1_000_000;
-      if (mbps > peak) peak = mbps;
-      ev.onSpeed({ t: t - startedAt, mbps });
-      windowBytes = 0;
-      windowStart = t;
-    }
   };
 
-  // Local abort fires at end of window, cancelling in-flight fetches immediately.
   const localAc = new AbortController();
   const onParentAbort = () => localAc.abort();
   signal.addEventListener("abort", onParentAbort);
   const timer = setTimeout(() => localAc.abort(), durationMs);
+
+  const ticker = setInterval(() => {
+    const t = now();
+    const dt = t - windowStart;
+    if (dt <= 0) return;
+    const mbps = (windowBytes * 8) / (dt / 1000) / 1_000_000;
+    if (mbps > peak) peak = mbps;
+    ev.onSpeed({ t: t - startedAt, mbps });
+    windowBytes = 0;
+    windowStart = t;
+  }, 250);
 
   const workers: Promise<void>[] = [];
   for (let i = 0; i < streams; i++) {
@@ -272,10 +281,9 @@ export async function runDownloadStress(
       (async () => {
         while (!localAc.signal.aborted) {
           try {
-            await downloadStream(chunk, localAc.signal, onBytes);
+            await downloadChunk(chunk, localAc.signal, onBytes);
           } catch {
             if (localAc.signal.aborted) break;
-            // brief backoff on transient failure, then retry
             await new Promise((r) => setTimeout(r, 100));
           }
         }
@@ -284,11 +292,10 @@ export async function runDownloadStress(
   }
 
   await Promise.allSettled(workers);
+  clearInterval(ticker);
   clearTimeout(timer);
   signal.removeEventListener("abort", onParentAbort);
 
-  const totalMs = now() - windowStart + (now() - startedAt - (now() - windowStart));
-  void totalMs; // unused; kept for potential future averaging
   ev.onLog(
     `Download complete: ${(totalBytes / 1_000_000).toFixed(1)} MB total · peak ${peak.toFixed(1)} Mbps`,
   );
@@ -353,21 +360,23 @@ export async function runUploadStress(
   const onProgress = (delta: number) => {
     totalBytes += delta;
     windowBytes += delta;
-    const t = now();
-    const dt = t - windowStart;
-    if (dt >= 200) {
-      const mbps = (windowBytes * 8) / (dt / 1000) / 1_000_000;
-      if (mbps > peak) peak = mbps;
-      ev.onSpeed({ t: t - startedAt, mbps });
-      windowBytes = 0;
-      windowStart = t;
-    }
   };
 
   const localAc = new AbortController();
   const onParentAbort = () => localAc.abort();
   signal.addEventListener("abort", onParentAbort);
   const timer = setTimeout(() => localAc.abort(), durationMs);
+
+  const ticker = setInterval(() => {
+    const t = now();
+    const dt = t - windowStart;
+    if (dt <= 0) return;
+    const mbps = (windowBytes * 8) / (dt / 1000) / 1_000_000;
+    if (mbps > peak) peak = mbps;
+    ev.onSpeed({ t: t - startedAt, mbps });
+    windowBytes = 0;
+    windowStart = t;
+  }, 250);
 
   const workers: Promise<void>[] = [];
   for (let i = 0; i < streams; i++) {
@@ -386,6 +395,7 @@ export async function runUploadStress(
   }
 
   await Promise.allSettled(workers);
+  clearInterval(ticker);
   clearTimeout(timer);
   signal.removeEventListener("abort", onParentAbort);
 
