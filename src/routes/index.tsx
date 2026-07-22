@@ -14,6 +14,7 @@ import { LivePingChart } from "@/components/diagnostic/LivePingChart";
 import { MetricGauge } from "@/components/diagnostic/MetricGauge";
 import { PhaseRail } from "@/components/diagnostic/PhaseRail";
 import { VerdictPanel } from "@/components/diagnostic/VerdictPanel";
+import { PluginPanel } from "@/components/diagnostic/PluginPanel";
 
 export const Route = createFileRoute("/")({
   head: () => ({
