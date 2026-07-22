@@ -360,21 +360,23 @@ export async function runUploadStress(
   const onProgress = (delta: number) => {
     totalBytes += delta;
     windowBytes += delta;
-    const t = now();
-    const dt = t - windowStart;
-    if (dt >= 200) {
-      const mbps = (windowBytes * 8) / (dt / 1000) / 1_000_000;
-      if (mbps > peak) peak = mbps;
-      ev.onSpeed({ t: t - startedAt, mbps });
-      windowBytes = 0;
-      windowStart = t;
-    }
   };
 
   const localAc = new AbortController();
   const onParentAbort = () => localAc.abort();
   signal.addEventListener("abort", onParentAbort);
   const timer = setTimeout(() => localAc.abort(), durationMs);
+
+  const ticker = setInterval(() => {
+    const t = now();
+    const dt = t - windowStart;
+    if (dt <= 0) return;
+    const mbps = (windowBytes * 8) / (dt / 1000) / 1_000_000;
+    if (mbps > peak) peak = mbps;
+    ev.onSpeed({ t: t - startedAt, mbps });
+    windowBytes = 0;
+    windowStart = t;
+  }, 250);
 
   const workers: Promise<void>[] = [];
   for (let i = 0; i < streams; i++) {
@@ -393,6 +395,7 @@ export async function runUploadStress(
   }
 
   await Promise.allSettled(workers);
+  clearInterval(ticker);
   clearTimeout(timer);
   signal.removeEventListener("abort", onParentAbort);
 
