@@ -14,6 +14,7 @@ import { LivePingChart } from "@/components/diagnostic/LivePingChart";
 import { MetricGauge } from "@/components/diagnostic/MetricGauge";
 import { PhaseRail } from "@/components/diagnostic/PhaseRail";
 import { VerdictPanel } from "@/components/diagnostic/VerdictPanel";
+import { PluginPanel } from "@/components/diagnostic/PluginPanel";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -102,19 +103,24 @@ function Index() {
     const startedAt = performance.now();
     let currentPhase: Phase = "idle";
 
+    // RFC 3550 running jitter estimator: J = J + (|D(i-1,i)| - J) / 16
+    let rfcJitter = 0;
+    let lastRtt: number | null = null;
     const ev = {
       onPing: (s: PingSample) => {
         samplesRef.current.push(s);
-        // rolling jitter over last 20
-        const tail = samplesRef.current.slice(-20).filter((x) => !x.lost);
-        let jSum = 0;
-        for (let i = 1; i < tail.length; i++) jSum += Math.abs(tail[i].rtt - tail[i - 1].rtt);
-        const jitter = tail.length > 1 ? jSum / (tail.length - 1) : 0;
+        if (!s.lost) {
+          if (lastRtt != null) {
+            const d = Math.abs(s.rtt - lastRtt);
+            rfcJitter = rfcJitter + (d - rfcJitter) / 16;
+          }
+          lastRtt = s.rtt;
+        }
         const lostCount = samplesRef.current.slice(-100).filter((x) => x.lost).length;
         pendingLive.current = {
           ...pendingLive.current,
           currentPing: +s.rtt.toFixed(1),
-          currentJitter: +jitter.toFixed(2),
+          currentJitter: +rfcJitter.toFixed(2),
           loss: +(lostCount / Math.min(100, samplesRef.current.length)).toFixed(4),
         };
         scheduleFlush();
@@ -283,8 +289,9 @@ function Index() {
 
         {/* Verdict or log */}
         {result ? (
-          <div className="mb-4">
+          <div className="mb-4 space-y-4">
             <VerdictPanel result={result} />
+            <PluginPanel result={result} />
           </div>
         ) : (
           <div className="panel mb-4 p-4">
