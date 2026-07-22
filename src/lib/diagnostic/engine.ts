@@ -278,7 +278,7 @@ export async function runDownloadStress(
       (async () => {
         while (!localAc.signal.aborted) {
           try {
-            await downloadStream(chunk, localAc.signal, onBytes);
+            await downloadChunk(chunk, localAc.signal, onBytes);
           } catch {
             if (localAc.signal.aborted) break;
             // brief backoff on transient failure, then retry
